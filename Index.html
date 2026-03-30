@@ -1,0 +1,2316 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Калькулятор вартості AI-відео</title>
+  <!--
+    v2.8 (canvas-ready, fixed)
+    - Fix: implement missing compute() (was causing ReferenceError)
+    - Fix: summarizeFormats() returned wrong structure + referenced undefined vars
+    - UX: resizes can be полностью пустыми (не добавляем обязательный рядок при старте)
+    - Keep: Monobank buy курс + ручной курс, PDF same-window, multi-presets
+    - Compat: no optional chaining, no nullish coalescing, no replaceAll
+    - Markup logic: subtotal -> +markup -> taxable -> tax
+  -->
+  <style>
+    /* Bento multiline readability */
+    #bentoFormats, #bentoScript, #bentoExtras{white-space:normal; line-height:1.25;}
+    #bentoFormats br, #bentoScript br, #bentoExtras br{content:"";}
+
+    :root{
+      --bg:#0b0d10;
+      --paper:#ffffff;
+      --ink:#111827;
+      --muted:#4b5563;
+      --line:#111827;
+      --shadow: 6px 6px 0 var(--line);
+      --shadow-sm: 4px 4px 0 var(--line);
+      --radius:18px;
+
+      /* Base palette (restored) */
+      --c1:#a7f3d0;
+      --c2:#fde68a;
+      --c3:#fca5a5;
+      --c4:#93c5fd;
+      --c5:#f0abfc;
+
+      --font-head: "Montserrat", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      --font-body: "Montserrat", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+
+    /* Optional font load (online; graceful fallback offline) */
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800;900&display=swap');
+
+    *{box-sizing:border-box}
+
+    body{
+      margin:0;
+      font-family: var(--font-body);
+      color:var(--ink);
+      background: var(--bg);
+    }
+
+    .wrap{max-width:1200px; margin:0 auto; padding:22px;}
+
+    header{display:flex; gap:14px; align-items:flex-start; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap;}
+
+    .title h1{
+      margin:0;
+      font-family: var(--font-head);
+      font-size:34px;
+      font-weight:900;
+      letter-spacing:.8px;
+      text-transform:uppercase;
+      line-height:1.05;
+      text-shadow: 2px 2px 0 var(--line);
+      color:#e5e7eb;
+    }
+    .title-accent{
+      color:#ffffff;
+    }
+
+    .grid{display:grid; grid-template-columns: 1.15fr .85fr; gap:16px;}
+@media(max-width:980px){.grid{grid-template-columns:1fr;}}
+
+    .card{
+      background:var(--paper);
+      border:2px solid var(--line);
+      border-radius:var(--radius);
+      padding:16px;
+      box-shadow: var(--shadow);
+      position:relative;
+    }
+    .card::after{
+      content:"";
+      position:absolute;
+      inset:10px;
+      border-radius:calc(var(--radius) - 8px);
+      border:1px dashed rgba(17,24,39,.18);
+      pointer-events:none;
+      opacity:.8;
+    }
+
+    .card h2{
+      margin:0 0 10px;
+      font-size:12px;
+      color:var(--ink);
+      font-weight:950;
+      letter-spacing:1.6px;
+      text-transform:uppercase;
+      font-family: var(--font-head);
+    }
+
+    label{display:block; font-size:12px; color:var(--muted); margin:10px 0 6px; font-weight:700;}
+
+    select,input[type="number"],input[type="text"],textarea{
+      appearance:none;
+      -webkit-appearance:none;
+      -moz-appearance:none;
+      width:100%;
+      padding:10px 12px;
+      border-radius:14px;
+      border:2px solid var(--line);
+      background:var(--paper);
+      color:var(--ink);
+      outline:none;
+      box-shadow: var(--shadow-sm);
+      transition: transform .12s ease, box-shadow .12s ease;
+      font-weight:500;
+    }
+    select:focus,input:focus,textarea:focus{
+      transform: translate(-1px,-1px);
+      box-shadow: 7px 7px 0 var(--line);
+      outline:none;
+    }
+    textarea{resize:vertical; min-height:92px}
+
+    .row{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+    @media(max-width:640px){.row{grid-template-columns:1fr;}}
+
+    .slider-wrap{display:flex; gap:10px; align-items:center;}
+    input[type="range"]{width:100%; accent-color:var(--line); outline:none;}
+    input[type="range"]:focus{outline:none; box-shadow:none;}
+    input[type="range"]::-moz-focus-outer{border:0;}
+
+    .small{font-size:12px; color:var(--muted); line-height:1.45; font-weight:500; margin-top:8px;}
+
+    .module{
+      border:2px solid var(--line);
+      border-radius:18px;
+      padding:14px;
+      margin-top:12px;
+      box-shadow: var(--shadow);
+      position:relative;
+      overflow:hidden;
+    }
+
+    .module .small{
+      background:rgba(255,255,255,.6);
+      border:1px dashed rgba(0,0,0,.25);
+      padding:8px 10px;
+      border-radius:12px;
+      margin-top:12px;
+    }
+
+    .module-head{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      position:relative;
+      z-index:1;
+      padding-left:38px;
+      min-height:30px;
+    }
+
+    .module-title{
+      font-size:13px;
+      font-weight:950;
+      text-transform:uppercase;
+      letter-spacing:1px;
+      font-family: var(--font-head);
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+    .module-title::before{
+      content:"";
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width:22px;
+      height:22px;
+      border:2px solid var(--line);
+      border-radius:10px;
+      box-shadow: var(--shadow-sm);
+      background:var(--paper);
+      font-size:13px;
+      line-height:1;
+    }
+
+    .badge{
+      font-size:11px;
+      color:var(--ink);
+      border:2px solid var(--line);
+      padding:4px 8px;
+      border-radius:999px;
+      background:var(--c2);
+      box-shadow: var(--shadow-sm);
+      font-weight:900;
+      text-transform:uppercase;
+      font-family: var(--font-head);
+      letter-spacing:.6px;
+      white-space:nowrap;
+    }
+
+    .module-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:10px;}
+    @media(max-width:640px){.module-grid{grid-template-columns:1fr;}}
+
+    .result{
+      position:sticky; top:14px;
+      padding:18px;
+      border-radius:var(--radius);
+      background:var(--paper);
+      border:2px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    /* timeline */
+    .timeline{margin-top:12px; padding:12px; border:2px solid var(--line); border-radius:16px; background:rgba(255,255,255,.7); box-shadow: var(--shadow-sm);}    
+    .timeline h3{margin:0 0 8px; font-size:12px; font-weight:950; text-transform:uppercase; letter-spacing:1.2px; font-family:var(--font-head);}  
+    .tl-row{display:flex; align-items:center; gap:10px; margin:8px 0;}
+    .tl-svg{flex:1; width:100%; display:block; height:16px; border:2px solid var(--line); border-radius:999px; background:var(--paper); box-shadow: var(--shadow-sm); overflow:hidden;}
+    .tl-legend{display:flex; flex-wrap:wrap; gap:8px 12px; margin-top:8px; font-size:10px; color:var(--muted); font-weight:700; line-height:1.2;}
+    .dot{width:10px; height:10px; border:2px solid var(--line); border-radius:3px; display:inline-block; transform:translateY(1px);} 
+
+    .result .big{font-size:40px; font-weight:1000; letter-spacing:.2px; margin:6px 0 2px; font-family: var(--font-head);}
+    .result .sub{color:var(--muted); font-size:12px; line-height:1.45; font-weight:500;}
+
+    .breakdown{margin-top:12px; border-top:2px solid rgba(17,24,39,.15); padding-top:12px;}
+    .lineitem{display:flex; justify-content:space-between; gap:10px; padding:6px 0; font-size:12px; color:var(--ink); font-weight:500;}
+    .lineitem span:last-child{color:var(--ink); white-space:nowrap; font-weight:950; font-family: var(--font-head);}
+
+    .actions{display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;}
+
+    button{
+      border:2px solid var(--line);
+      background:var(--paper);
+      color:var(--ink);
+      padding:10px 12px;
+      border-radius:14px;
+      cursor:pointer;
+      font-weight:950;
+      font-size:12px;
+      box-shadow: var(--shadow-sm);
+      transition: transform .12s ease, box-shadow .12s ease;
+      font-family: var(--font-head);
+      letter-spacing:.5px;
+      outline:none;
+    }
+    button:hover{transform: translate(-1px,-1px); box-shadow: 7px 7px 0 var(--line);} 
+    button:active{transform: translate(0,0); box-shadow: var(--shadow-sm);} 
+    button.primary{background:var(--c4);} 
+
+    /* Soft bento-style button */
+    .btn-soft{background:rgba(255,255,255,.7);} 
+
+    /* Danger button (reset) */
+    button.danger{background:#fee2e2;}
+    button.danger:hover{box-shadow: 7px 7px 0 var(--line);} 
+
+    /* Modal */
+    .modal-backdrop{position:fixed; inset:0; background:rgba(17,24,39,.55); display:none; align-items:center; justify-content:center; padding:18px; z-index:10000;}
+    .modal-backdrop.open{display:flex;}
+    .modal{width:min(520px, 100%); background:var(--paper); border:2px solid var(--line); border-radius:var(--radius); box-shadow: var(--shadow); padding:16px; position:relative;}
+    .modal h3{margin:0 0 10px; font-size:14px; font-weight:950; text-transform:uppercase; letter-spacing:1px; font-family: var(--font-head);} 
+    .modal p{margin:0; color:var(--muted); font-size:12px; line-height:1.5; font-weight:600;}
+    .modal-actions{display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; margin-top:14px;}
+    
+    .sr-only{position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;}
+details{border:2px solid var(--line); border-radius:var(--radius); background:var(--paper); padding:12px; margin-top:14px; box-shadow: var(--shadow);}    
+    summary{cursor:pointer; font-weight:950; font-size:12px; color:var(--ink); text-transform:uppercase; font-family: var(--font-head); outline:none;}
+
+    input[type="checkbox"]{accent-color:var(--line); transform: translateY(1px); outline:none;}
+    input[type="checkbox"]:focus{outline:none; box-shadow:none;}
+
+    .toast{position:fixed; bottom:18px; left:50%; transform:translateX(-50%);
+      background:var(--paper);
+      border:2px solid var(--line);
+      padding:10px 12px;
+      border-radius:999px;
+      font-size:12px;
+      color:var(--ink);
+      display:none;
+      box-shadow: var(--shadow-sm);
+      font-weight:950;
+      font-family: var(--font-head);
+      letter-spacing:.5px;
+      z-index:9999;
+    }
+
+    @media(max-width:640px){
+  .card::after{display:none;}
+  .result .big{font-size:34px;}
+  .title h1{font-size:28px;}
+}
+
+/* ===== Mobile layout fixes (no horizontal scroll, inputs first, result below) ===== */
+html, body{max-width:100%; overflow-x:hidden;}
+@media(max-width:980px){
+  /* On phone/tablet: result should be in normal flow (below modules) */
+  .result{position:static; top:auto;}
+}
+@media(max-width:640px){
+  .wrap{padding:14px;}
+  .grid{gap:14px;}
+  .card{padding:14px;}
+  .result{padding:14px;}
+  /* prevent long content from forcing width */
+  .card, .result, .module{min-width:0;}
+  select, input, textarea{max-width:100%;}
+  /* If any shadow/transform causes overflow, keep it contained */
+  button:hover{transform:none;}
+}
+
+/* Make dynamic rows (resizes/extras) responsive without changing desktop */
+@media(max-width:520px){
+  .resize-row, .extra-row{grid-template-columns: 36px 1fr !important; gap:10px !important;}
+  .resize-row > div:nth-child(3), .extra-row > div:nth-child(3){grid-column: 1 / -1;}
+  .resize-row > div:nth-child(4), .extra-row > div:nth-child(4){grid-column: 2 / -1; justify-self:end;}
+  .resize-row > div:nth-child(1), .extra-row > div:nth-child(1){align-self:start;}
+}
+
+    /* ===== Stable icon+color mapping (data-key, stable) ===== */
+    .module[data-key] .module-title::before{background:var(--paper);} 
+
+    .module[data-key="mainVideo"]{background:var(--paper);}     
+    .module[data-key="resizes"]{background:var(--c4);}         
+    .module[data-key="series"]{background:var(--c5);}          
+    .module[data-key="rush"]{background:var(--c2);}            
+    .module[data-key="script"]{background:var(--c1);}          
+    .module[data-key="complexity"]{background:var(--c4);}      
+    .module[data-key="lipsync"]{background:var(--c3);}         
+    .module[data-key="vfx"]{background:var(--c4);}             
+    .module[data-key="extra"]{background:var(--c2);}           
+    .module[data-key="markup"]{background:var(--c1);}          
+    .module[data-key="tax"]{background:var(--c3);}             
+
+    .module[data-key="mainVideo"] .module-title::before{content:"🎬" !important;}
+    .module[data-key="resizes"] .module-title::before{content:"📐" !important;}
+    .module[data-key="series"] .module-title::before{content:"🎞️" !important;}
+    .module[data-key="rush"] .module-title::before{content:"⏱️" !important;}
+    .module[data-key="script"] .module-title::before{content:"📝" !important;}
+    .module[data-key="complexity"] .module-title::before{content:"💪" !important;}
+    .module[data-key="lipsync"] .module-title::before{content:"🗣️" !important;}
+    .module[data-key="vfx"] .module-title::before{content:"🖥️" !important;}
+    .module[data-key="extra"] .module-title::before{content:"💸" !important;}
+    .module[data-key="markup"] .module-title::before{content:"🪙" !important;}
+    .module[data-key="tax"] .module-title::before{content:"💰" !important;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="title">
+        <h1>Калькулятор вартості <span class="title-accent">AI-відео</span></h1>
+      </div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+
+        <!-- Основне відео -->
+        <div class="module" data-key="mainVideo">
+          <div class="module-head">
+            <div class="module-title">ОСНОВНЕ ВІДЕО</div>
+            <div class="badge">БАЗА</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Базова ставка за 1 секунду (USD)</label>
+              <input id="ratePerSec" type="number" min="0" step="0.5" value="10" />
+              <div class="small">Найпростіший сценарій роботи: промпт -> зображення -> анімація, мінімум обробки, базовий монтаж.</div>
+            </div>
+            <div>
+              <label>Орієнтація / формат основного відео</label>
+              <select id="primaryFormat">
+                <option value="16:9" selected>Горизонтальний (16:9)</option>
+                <option value="9:16">Вертикальний (9:16)</option>
+                <option value="1:1">Квадратний (1:1)</option>
+              </select>
+              <div class="small">Це базова версія. Додаткові формати додаються нижче як окремі ресайзи.</div>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top:10px">
+            <div>
+              <label>Валюта відображення</label>
+              <select id="currency">
+                <option value="USD" selected>USD</option>
+                <option value="UAH">UAH (ручний курс)</option>
+              </select>
+            </div>
+            <div>
+              <label>Курс (UAH за 1 USD)</label>
+              <div style="display:flex; gap:10px; align-items:center;">
+                <input id="fx" type="number" min="1" step="0.1" value="40" style="flex:1" />
+                <button type="button" id="fxRefresh" title="Оновити курс" aria-label="Оновити курс" style="width:44px; padding:10px 0">🔄</button>
+              </div>
+              <div class="small" id="fxMeta"></div>
+            </div>
+          </div>
+
+          <label style="margin-top:10px">Тривалість ролика (сек)</label>
+          <div class="slider-wrap">
+            <input id="seconds" type="range" min="0" max="360" step="1" value="0" />
+            <input id="secondsBox" type="number" min="0" max="360" step="1" value="0" style="width:100px" />
+          </div>
+          <div class="small" id="baseHint"></div>
+        </div>
+
+        <!-- Додаткові ресайзи/формати -->
+        <div class="module" data-key="resizes">
+          <div class="module-head">
+            <div class="module-title">ДОДАТКОВІ РЕСАЙЗИ</div>
+            <div class="badge">формати</div>
+          </div>
+
+          <div class="module-grid">
+            <div>
+              <label>Коефіцієнт доп. формату (за замовч.)</label>
+              <input id="formatK" type="number" min="0" step="0.05" value="0.8" />
+              <!-- <div class="small">Якщо не міняєш у рядку - береться це значення.</div>-->
+            </div>
+            <div>
+              <label>Додати формат</label>
+              <button type="button" id="addResize" class="btn-soft" style="width:100%">+ Додати ресайз</button>
+             <!-- <div class="small">Кожен ресайз рахується як частка від вартості основного відео після множників.</div>-->
+            </div>
+          </div>
+
+          <div id="resizeList" style="margin-top:10px"></div>
+
+          <template id="resizeRowTpl">
+            <div class="resize-row" data-idx="__IDX__" style="display:grid; grid-template-columns: 44px 1fr 140px 44px; gap:10px; align-items:center; margin-top:10px;">
+              <div style="font-weight:950; text-align:center; border:2px solid var(--line); border-radius:14px; padding:10px 0; box-shadow: var(--shadow-sm); background: rgba(255,255,255,.7);">__N__</div>
+              <div>
+                <label style="margin:0 0 6px">Формат</label>
+                <select class="resizeFormat" aria-label="Формат resize">
+                  <option value="16:9">Горизонтальний (16:9)</option>
+                  <option value="9:16" selected>Вертикальний (9:16)</option>
+                  <option value="1:1">Квадратний (1:1)</option>
+                </select>
+              </div>
+              <div>
+                <label style="margin:0 0 6px">Коеф.</label>
+                <input class="resizeK" type="number" min="0" step="0.05" value="0.8" />
+              </div>
+              <div>
+                <label style="margin:0 0 6px">&nbsp;</label>
+                <button type="button" class="delResize" title="Видалити" style="width:44px; padding:10px 0">✕</button>
+              </div>
+            </div>
+          </template>
+
+          
+        </div>
+
+        <div class="module" data-key="series">
+          <div class="module-head">
+            <div class="module-title">Додаткові рендери без перегенерації</div>
+            <div class="badge">$ / сек / версія</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Кількість додаткових рендерів</label>
+              <input id="extraRenders" type="number" min="0" step="1" placeholder="0" />
+            </div>
+            <div>
+              <label>Ставка за 1 сек за 1 рендер (USD)</label>
+              <input id="renderRate" type="number" min="0" step="0.1" value="1" />
+            </div>
+          </div>
+          <div class="small">Коли майже нічого не переробляємо: адаптація під інший розмір/композицію і перерендер.</div>
+        </div>
+
+        <div class="module" data-key="rush">
+          <div class="module-head">
+            <div class="module-title">Терміновість</div>
+            <div class="badge">множник</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Дедлайн</label>
+              <select id="rushPreset">
+                <option value="1" selected>Стандарт (≈ 1 місяць на 30-60 сек рекламу)</option>
+                <option value="1.5">Швидко (≈ 2 тижні) x1.5</option>
+                <option value="2">Дуже швидко (≈ 1 тиждень) x2</option>
+              </select>
+            </div>
+            <div>
+              <label>Або вручну (множник)</label>
+              <input id="rushK" type="number" min="1" step="0.05" value="1" />
+              <!-- <div class="small">Якщо вибрав пресет - множник підтягнеться сюди. Можеш правити.</div> -->
+            </div>
+          </div>
+        </div>
+
+        <div class="module" data-key="script">
+          <div class="module-head">
+            <div class="module-title">Сценарій</div>
+            <div class="badge">фікс</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Каркас + доопрацювання (кількість)</label>
+              <input id="scriptEditCount" type="number" min="0" step="1" placeholder="0" />
+              <label style="margin-top:10px">Ціна за 1 (USD)</label>
+              <input id="scriptEditPrice" type="number" min="0" step="5" value="75" />
+            </div>
+            <div>
+              <label>Сценарій "під ключ" (кількість)</label>
+              <input id="scriptFullCount" type="number" min="0" step="1" placeholder="0" />
+              <label style="margin-top:10px">Ціна за 1 (USD)</label>
+              <input id="scriptFullPrice" type="number" min="0" step="5" value="125" />
+            </div>
+          </div>
+          <div class="small">Сценарій від клієнта без змін - безкоштовно.</div>
+        </div>
+
+        <div class="module" data-key="complexity">
+          <div class="module-head">
+            <div class="module-title">Складність монтажу/генерації</div>
+            <div class="badge">% відео</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Скільки % ролика "складне"</label>
+              <input id="hardPct" type="number" min="0" max="100" step="1" placeholder="0" />
+              <div class="small">0 = все легке (x1). 100 = все складне.</div>
+            </div>
+            <div>
+              <label>Множник для "складного" сегмента</label>
+              <input id="hardK" type="number" min="1" step="0.05" value="2" />
+              <div class="small">Напр. x2, якщо багато складних рухів камери/переходів.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="module" data-key="lipsync">
+          <div class="module-head">
+            <div class="module-title">Ліпсінг</div>
+            <div class="badge">$/сек</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Секунди ліпсінгу в ролику</label>
+              <input id="lipsyncSec" type="number" min="0" step="1" placeholder="0" />
+            </div>
+            <div>
+              <label>Ставка за 1 сек ліпсінгу (USD)</label>
+              <input id="lipsyncRate" type="number" min="0" step="0.1" value="1" />
+            </div>
+          </div>
+        </div>
+
+        <div class="module" data-key="vfx">
+          <div class="module-head">
+            <div class="module-title">VFX / складний постпродакшн</div>
+            <div class="badge">$/сек</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label>Секунди VFX</label>
+              <input id="vfxSec" type="number" min="0" step="1" placeholder="0" />
+            </div>
+            <div>
+              <label>Ставка за 1 сек VFX (USD)</label>
+              <input id="vfxRate" type="number" min="0" step="0.1" value="5" />
+            </div>
+          </div>
+        </div>
+
+        <div class="module" data-key="extra">
+          <div class="module-head">
+            <div class="module-title">Додаткові витрати (фікс)</div>
+            <div class="badge">USD</div>
+          </div>
+
+          <div class="module-grid">
+            <div>
+              <label>Додати пункт</label>
+              <button type="button" class="primary" id="addExtra" style="width:100%">+ Додати витрату</button>
+              <!--<div class="small">Кожен пункт додається до підсумку ДО маркапу і ДО нарахування податку.</div>-->
+            </div>
+            <div>
+              <label>Підсумок додаткових витрат</label>
+              <input id="extraFixedTotal" type="number" min="0" step="1" value="0" disabled />
+              <!--<div class="small">Це сума всіх пунктів нижче (лише для довідки).</div>-->
+            </div>
+          </div>
+
+          <div id="extraList" style="margin-top:10px"></div>
+
+          <template id="extraRowTpl">
+            <div class="extra-row" data-idx="__IDX__" style="display:grid; grid-template-columns: 44px 1fr 140px 44px; gap:10px; align-items:center; margin-top:10px;">
+              <div style="font-weight:950; text-align:center; border:2px solid var(--line); border-radius:14px; padding:10px 0; box-shadow: var(--shadow-sm); background: rgba(255,255,255,.7);">__N__</div>
+              <div>
+                <label style="margin:0 0 6px">Позиція</label>
+                <input class="extraName" type="text" placeholder="наприклад: диктор, режисер, музика" />
+              </div>
+              <div>
+                <label style="margin:0 0 6px">Сума (USD)</label>
+                <input class="extraAmt" type="number" min="0" step="1" placeholder="0" />
+              </div>
+              <div>
+                <label style="margin:0 0 6px">&nbsp;</label>
+                <button type="button" class="delExtra" title="Видалити" style="width:44px; padding:10px 0">✕</button>
+              </div>
+            </div>
+          </template>
+
+          <!--<div class="small">Можна залишити список порожнім - тоді додаткові витрати не рахуються.</div>-->
+        </div>
+
+        <div class="module" data-key="markup">
+          <div class="module-head">
+            <div class="module-title">Маркап</div>
+            <div class="badge">%</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label><input id="markupOn" type="checkbox" /> Додати маркап</label>
+              <div class="small">Маркап рахується від суми до податку і додається перед податком.</div>
+            </div>
+            <div>
+              <label>Маркап (%)</label>
+              <input id="markupPct" type="number" min="0" step="0.5" value="10" />
+            </div>
+          </div>
+        </div>
+
+        <div class="module" data-key="tax">
+          <div class="module-head">
+            <div class="module-title">Податки / ФОП</div>
+            <div class="badge">%</div>
+          </div>
+          <div class="module-grid">
+            <div>
+              <label><input id="taxOn" type="checkbox" /> Додати податок</label>
+              <div class="small">Нараховується на суму після маркапу (сума до податку).</div>
+            </div>
+            <div>
+              <label>Відсоток податку (%)</label>
+              <input id="taxPct" type="number" min="0" step="0.5" value="6" />
+            </div>
+          </div>
+        </div>
+
+        <details>
+  <summary>Пресети / збереження</summary>
+  <div class="small" style="margin-top:8px">Пресети зберігаються в браузері (localStorage). Можна експортувати/імпортувати JSON.</div>
+
+  <div class="module" style="margin-top:10px">
+    <div class="module-head">
+      <div class="module-title">Менеджер пресетів</div>
+      <div class="badge">multi</div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <div>
+        <label>Поточний пресет</label>
+        <select id="presetSelect"></select>
+        <div class="small">Обери пресет і натисни "Завантажити" або включи авто-завантаження.</div>
+      </div>
+      <div>
+        <label>Назва для збереження</label>
+        <input id="presetName" type="text" placeholder="Наприклад: Reels 15s" />
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:12px">
+      <button id="loadPreset">Завантажити</button>
+      <button class="primary" id="savePreset">Зберегти</button>
+      <button id="saveAsPreset">Зберегти як новий</button>
+      <button id="deletePreset">Видалити</button>
+      <label style="display:flex; align-items:center; gap:8px; margin-left:auto; font-size:12px; color:var(--muted); font-weight:800;">
+        <input id="autoLoadPreset" type="checkbox" /> Авто-завантаження
+      </label>
+    </div>
+
+    <div class="row" style="margin-top:12px">
+      <div>
+        <label>Експорт пресетів (JSON)</label>
+        <button id="exportPresets">Скопіювати JSON</button>
+        <div class="small">Копіює всі пресети в буфер. Можна зберегти в нотатки/файл.</div>
+      </div>
+      <div>
+        <label>Імпорт пресетів (JSON)</label>
+        <textarea id="importBox" rows="4" placeholder='Встав JSON сюди...'></textarea>
+        <div class="actions" style="margin-top:10px">
+          <button id="importMerge">Імпорт (додати/оновити)</button>
+          <button id="importReplace">Імпорт (замінити все)</button>
+        </div>
+        <div class="small">"Додати/оновити" об'єднає списки (за id/назвою). "Замінити" повністю перезапише.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="reset">Скинути поля</button>
+  </div>
+</details>
+
+      </section>
+
+      <aside class="result">
+        <div class="small" style="color:var(--muted)">Результат</div>
+        <div class="big" id="total">$0</div>
+        <div class="sub" id="summary"></div>
+
+        <div class="timeline" id="timelineWrap" aria-label="Timeline">
+          <h3>Таймлайн складності</h3>
+          <div class="tl-row" style="align-items:flex-start">
+            <div style="flex:1">
+              <svg class="tl-svg" viewBox="0 0 100 16" preserveAspectRatio="none" aria-hidden="true">
+                <rect x="0" y="0" width="100" height="16" fill="rgba(255,255,255,.35)"></rect>
+                <rect id="tlSegHard" x="0" y="0" width="0" height="16" fill="var(--c4)"></rect>
+                <rect id="tlSegLip"  x="0" y="0" width="0" height="16" fill="var(--c3)"></rect>
+                <rect id="tlSegVfx"  x="0" y="0" width="0" height="16" fill="var(--c5)"></rect>
+                <rect id="tlSegBase" x="0" y="0" width="0" height="16" fill="rgba(255,255,255,.65)"></rect>
+              </svg>
+
+              <div class="tl-legend" style="margin-top:8px">
+                <span><span class="dot" style="background:var(--c4)"></span> складні <b id="tlHardMeta">0%</b></span>
+                <span><span class="dot" style="background:var(--c3)"></span> ліпсінг <b id="tlLipMeta">0%</b></span>
+                <span><span class="dot" style="background:var(--c5)"></span> VFX <b id="tlVfxMeta">0%</b></span>
+                <span><span class="dot" style="background:rgba(255,255,255,.65)"></span> інше <b id="tlBaseMeta">0%</b></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="breakdown">
+          <div class="small" style="color:var(--muted)">Розбивка</div>
+          <div id="breakdown"></div>
+        </div>
+
+        <!-- FX meta (restored) -->
+        <div class="small" id="fxLine" style="margin-top:10px;"></div>
+
+        <!-- Actions moved above Bento -->
+        <div class="actions actions-top" style="margin:14px 0; display:flex; gap:10px; justify-content:flex-end;">
+          <button class="primary" id="copy">Копіювати кошторис</button>
+          <button id="resetTop" class="danger" title="Очистити всі дані" aria-label="Очистити всі дані">✕</button>
+        </div>
+
+        <!-- Bento info (moved from PDF view) -->
+        <div class="bento-main" id="bentoMain" style="margin-top:14px; display:grid; grid-template-columns:1fr; gap:12px;">
+          <div class="bento-card" style="background:var(--c4); border:2px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px;">
+            <div style="margin:0 0 10px; font-size:12px; font-weight:950; text-transform:uppercase; letter-spacing:1.4px; font-family:var(--font-head);">Що ви отримуєте</div>
+            <div class="bento-mini" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <div class="bento-pill" style="border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Тривалість</div>
+                <div id="bentoDuration" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" style="border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Формати</div>
+                <div id="bentoFormats" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" style="border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Складність</div>
+                <div id="bentoHard" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" id="bentoLipWrap" style="display:none; border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Ліпсінг</div>
+                <div id="bentoLip" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" id="bentoVfxWrap" style="display:none; border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">VFX</div>
+                <div id="bentoVfx" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" id="bentoScriptWrap" style="display:none; border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Сценарій</div>
+                <div id="bentoScript" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" id="bentoRendersWrap" style="display:none; border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Дод. рендери</div>
+                <div id="bentoRenders" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+              <div class="bento-pill" id="bentoExtrasWrap" style="display:none; border:2px solid var(--line); border-radius:16px; padding:10px 12px; box-shadow:var(--shadow-sm); background:rgba(255,255,255,.7);">
+                <div style="font-size:11px; color:var(--muted); font-weight:700; text-transform:uppercase; letter-spacing:.8px;">Дод. витрати</div>
+                <div id="bentoExtras" style="margin-top:4px; font-weight:950;">-</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bento-card" style="background:var(--c1); border:2px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:14px;">
+            <div style="margin:0 0 10px; font-size:12px; font-weight:950; text-transform:uppercase; letter-spacing:1.4px; font-family:var(--font-head);">Підсумок по вартості</div>
+            <div id="bentoPriceRows"></div>
+            <div class="bento-total" style="margin-top:12px; padding:14px; border:2px solid var(--line); border-radius:18px; box-shadow:var(--shadow); background:var(--c2);">
+              <div id="bentoTotal" style="font-size:34px; font-weight:1000; font-family:var(--font-head);">-</div>
+              <div id="bentoNote" style="margin-top:4px; font-size:12px; color:var(--muted); font-weight:600;">-</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Reset confirm modal -->
+  <div class="modal-backdrop" id="resetModal" role="dialog" aria-modal="true" aria-labelledby="resetTitle" aria-describedby="resetDesc">
+    <div class="modal" tabindex="-1">
+      
+      <h3 id="resetTitle">Очистити кошторис</h3>
+      <p id="resetDesc">Ви впевнені, що хочете видалити всі дані з кошторису? Це поверне поля до значень за замовчуванням.</p>
+      <div class="modal-actions">
+        <button type="button" id="resetNo">Ні</button>
+        <button type="button" class="primary" id="resetYes" style="background:var(--c2)">Так</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+
+    function $(id){ return document.getElementById(id); }
+
+    // Storage keys
+    var LS_PRESET = "ai_video_calc_preset_ua_v2"; // legacy single preset
+    var LS_PRESETS = "ai_video_calc_presets_ua_v1"; // multi presets
+    var LS_LAST_PRESET_ID = "ai_video_calc_last_preset_id";
+    var LS_AUTOLOAD = "ai_video_calc_autoload";
+
+    function toast(msg){
+      var t = $("toast");
+      t.textContent = String(msg);
+      t.style.display = "block";
+      clearTimeout(toast._tm);
+      toast._tm = setTimeout(function(){ t.style.display = "none"; }, 1400);
+    }
+
+    function money(n, currency){
+      if (currency === "UAH") {
+        return new Intl.NumberFormat("uk-UA", {style:"currency", currency:"UAH", maximumFractionDigits:0}).format(n);
+      }
+      return new Intl.NumberFormat("en-US", {style:"currency", currency:"USD", maximumFractionDigits:0}).format(n);
+    }
+
+    function escapeHtml(str){
+      return String(str)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function num(id){
+      var el = $(id);
+      return Number(el && el.value !== "" ? el.value : 0);
+    }
+
+    function clamp(v, a, b){
+      return Math.max(a, Math.min(b, v));
+    }
+
+    function formatLabel(fmt){
+      var f = String(fmt || "");
+      if(f === "16:9") return "Горизонтальний (16:9)";
+      if(f === "9:16") return "Вертикальний (9:16)";
+      if(f === "1:1") return "Квадратний (1:1)";
+      return f;
+    }
+
+    // Returns { text: "2× ... , 1× ..." }
+    function summarizeFormats(primaryFmt, resizes){
+      var counts = {"16:9":0,"9:16":0,"1:1":0};
+      var other = {};
+      function inc(fmt){
+        fmt = String(fmt || "");
+        if(counts[fmt] != null) counts[fmt] = counts[fmt] + 1;
+        else other[fmt] = (other[fmt] || 0) + 1;
+      }
+      inc(primaryFmt);
+      resizes = resizes || [];
+      for(var i=0;i<resizes.length;i++) inc(resizes[i].format);
+
+      var parts = [];
+      function pushIf(fmt){
+        var n = counts[fmt];
+        if(n>0) parts.push(n + "× " + formatLabel(fmt));
+      }
+      pushIf("16:9"); pushIf("9:16"); pushIf("1:1");
+      for(var k in other){ if(Object.prototype.hasOwnProperty.call(other,k)) parts.push(other[k] + "× " + formatLabel(k)); }
+
+      return { text: parts.join(", "), parts: parts };
+    }
+
+    // ===== Core math (FIXED: was missing) =====
+    function compute(inputs){
+      var seconds = clamp(Number(inputs.seconds || 0), 0, 360);
+      var ratePerSec = Math.max(0, Number(inputs.ratePerSec || 0));
+
+      var hardPctInput = Number(inputs.hardPct || 0);
+      var hardPct = clamp(hardPctInput / 100, 0, 1); // fraction 0..1
+      var hardK = Math.max(1, Number(inputs.hardK || 1));
+      var complexityK = (1 - hardPct) * 1 + (hardPct * hardK);
+
+      var rushK = Math.max(1, Number(inputs.rushK || 1));
+
+      var baseUSD = seconds * ratePerSec;
+      var coreFirstUSD = baseUSD * complexityK * rushK;
+
+      // resizes
+      var cleanResizes = [];
+      var resizes = (inputs.resizes && Array.isArray(inputs.resizes)) ? inputs.resizes : [];
+      for(var i=0;i<resizes.length;i++){
+        var r = resizes[i] || {};
+        var k = Number(r.k);
+        if(isNaN(k)) k = Number(inputs.formatK || 0);
+        k = Math.max(0, k);
+        cleanResizes.push({ format: String(r.format || "9:16"), k: k });
+      }
+      var extraFormatsUSD = 0;
+      for(var j=0;j<cleanResizes.length;j++) extraFormatsUSD += coreFirstUSD * cleanResizes[j].k;
+      var coreFormatsUSD = coreFirstUSD + extraFormatsUSD;
+
+      // extra renders
+      var extraRenders = Math.max(0, Number(inputs.extraRenders || 0));
+      var renderRate = Math.max(0, Number(inputs.renderRate || 0));
+      var rendersUSD = extraRenders * seconds * renderRate;
+
+      // scripts
+      var scriptEditCount = Math.max(0, Number(inputs.scriptEditCount || 0));
+      var scriptEditPrice = Math.max(0, Number(inputs.scriptEditPrice || 0));
+      var scriptFullCount = Math.max(0, Number(inputs.scriptFullCount || 0));
+      var scriptFullPrice = Math.max(0, Number(inputs.scriptFullPrice || 0));
+      var scriptEdit = scriptEditCount * scriptEditPrice;
+      var scriptFull = scriptFullCount * scriptFullPrice;
+      var scriptsUSD = scriptEdit + scriptFull;
+
+      // lipsync
+      var lipsyncSec = Math.max(0, Number(inputs.lipsyncSec || 0));
+      var lipsyncRate = Math.max(0, Number(inputs.lipsyncRate || 0));
+      var lipsyncUSD = lipsyncSec * lipsyncRate;
+
+      // vfx
+      var vfxSec = Math.max(0, Number(inputs.vfxSec || 0));
+      var vfxRate = Math.max(0, Number(inputs.vfxRate || 0));
+      var vfxUSD = vfxSec * vfxRate;
+
+      // extras fixed items
+      var cleanExtras = [];
+      var extraFixedTotal = 0;
+      var extraItems = (inputs.extraItems && Array.isArray(inputs.extraItems)) ? inputs.extraItems : [];
+      for(var ei=0;ei<extraItems.length;ei++){
+        var it = extraItems[ei] || {};
+        var name = String(it.name || "");
+        var amount = Number(it.amount || 0);
+        if(isNaN(amount)) amount = 0;
+        amount = Math.max(0, amount);
+        if(name.trim() || amount){
+          cleanExtras.push({ name: name, amount: amount });
+          extraFixedTotal += amount;
+        }
+      }
+
+      // subtotal (BEFORE markup/tax)
+      var subtotalUSD = coreFormatsUSD + rendersUSD + scriptsUSD + lipsyncUSD + vfxUSD + extraFixedTotal;
+
+      // markup & tax
+      var markupOn = !!inputs.markupOn;
+      var markupPct = Math.max(0, Number(inputs.markupPct || 0)) / 100;
+      var markupUSD = markupOn ? (subtotalUSD * markupPct) : 0;
+      var taxableUSD = subtotalUSD + markupUSD;
+
+      var taxOn = !!inputs.taxOn;
+      var taxPct = Math.max(0, Number(inputs.taxPct || 0)) / 100;
+      var taxUSD = taxOn ? (taxableUSD * taxPct) : 0;
+      var totalUSD = taxableUSD + taxUSD;
+
+      return {
+        seconds: seconds,
+        ratePerSec: ratePerSec,
+        primaryFormat: String(inputs.primaryFormat || "16:9"),
+        baseUSD: baseUSD,
+
+        hardPct: hardPct,
+        hardK: hardK,
+        complexityK: complexityK,
+        rushK: rushK,
+
+        resizes: cleanResizes,
+        coreFirstUSD: coreFirstUSD,
+        extraFormatsUSD: extraFormatsUSD,
+        coreFormatsUSD: coreFormatsUSD,
+
+        extraRenders: extraRenders,
+        renderRate: renderRate,
+        rendersUSD: rendersUSD,
+
+        scriptEdit: scriptEdit,
+        scriptFull: scriptFull,
+        scriptsUSD: scriptsUSD,
+
+        lipsyncSec: lipsyncSec,
+        lipsyncRate: lipsyncRate,
+        lipsyncUSD: lipsyncUSD,
+
+        vfxSec: vfxSec,
+        vfxRate: vfxRate,
+        vfxUSD: vfxUSD,
+
+        extraItems: cleanExtras,
+        extraFixedTotal: extraFixedTotal,
+
+        subtotalUSD: subtotalUSD,
+        markupOn: markupOn,
+        markupPct: markupPct,
+        markupUSD: markupUSD,
+
+        taxableUSD: taxableUSD,
+        taxOn: taxOn,
+        taxPct: taxPct,
+        taxUSD: taxUSD,
+
+        totalUSD: totalUSD
+      };
+    }
+
+    function renderTimeline(s){
+      var seconds = Math.max(1, Number(s.seconds || 1));
+
+      var hardPct = clamp(Number(s.hardPct || 0), 0, 1) * 100;
+      var lipPct = clamp((Number(s.lipsyncSec || 0) / seconds) * 100, 0, 100);
+      var vfxPct = clamp((Number(s.vfxSec || 0) / seconds) * 100, 0, 100);
+
+      var stack = hardPct + lipPct + vfxPct;
+      if(stack > 100){
+        var k = 100 / stack;
+        hardPct *= k;
+        lipPct *= k;
+        vfxPct *= k;
+        stack = 100;
+      }
+      var basePct = clamp(100 - stack, 0, 100);
+
+      var x = 0;
+      var segHard = $("tlSegHard");
+      var segLip  = $("tlSegLip");
+      var segVfx  = $("tlSegVfx");
+      var segBase = $("tlSegBase");
+
+      if(segHard){ segHard.setAttribute("x", x.toFixed(3)); segHard.setAttribute("width", hardPct.toFixed(3)); }
+      x += hardPct;
+      if(segLip){  segLip.setAttribute("x", x.toFixed(3));  segLip.setAttribute("width", lipPct.toFixed(3)); }
+      x += lipPct;
+      if(segVfx){  segVfx.setAttribute("x", x.toFixed(3));  segVfx.setAttribute("width", vfxPct.toFixed(3)); }
+      x += vfxPct;
+      if(segBase){ segBase.setAttribute("x", x.toFixed(3)); segBase.setAttribute("width", basePct.toFixed(3)); }
+
+      var hm = $("tlHardMeta");
+      var lm = $("tlLipMeta");
+      var vm = $("tlVfxMeta");
+      var bm = $("tlBaseMeta");
+      if(hm) hm.textContent = String(Math.round(hardPct)) + "%";
+      if(lm) lm.textContent = String(Math.round(lipPct)) + "%";
+      if(vm) vm.textContent = String(Math.round(vfxPct)) + "%";
+      if(bm) bm.textContent = String(Math.round(basePct)) + "%";
+    }
+
+    function getResizesFromUI(){
+      var list = $("resizeList");
+      var rows = list ? list.querySelectorAll(".resize-row") : [];
+      var out = [];
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        var sel = r.querySelector(".resizeFormat");
+        var inp = r.querySelector(".resizeK");
+        var fmt = sel ? sel.value : "9:16";
+        var k = inp ? (inp.value !== "" ? Number(inp.value) : NaN) : NaN;
+        if(isNaN(k)) k = num("formatK") || 0.8;
+        out.push({ format: fmt, k: k });
+      }
+      return out;
+    }
+
+    function getExtrasFromUI(){
+      var list = $("extraList");
+      var rows = list ? list.querySelectorAll(".extra-row") : [];
+      var out = [];
+      for(var i=0;i<rows.length;i++){
+        var r = rows[i];
+        var nameEl = r.querySelector(".extraName");
+        var amtEl = r.querySelector(".extraAmt");
+        var name = nameEl ? String(nameEl.value || "").trim() : "";
+        var amount = amtEl ? (amtEl.value !== "" ? Number(amtEl.value) : 0) : 0;
+        if(isNaN(amount)) amount = 0;
+        if(name || amount){
+          out.push({ name: name, amount: Math.max(0, amount) });
+        }
+      }
+      return out;
+    }
+
+    function renumberExtraRows(){
+      var list = $("extraList");
+      if(!list) return;
+      var rows = list.querySelectorAll(".extra-row");
+      for(var i=0;i<rows.length;i++){
+        var first = rows[i].children && rows[i].children[0];
+        if(first) first.textContent = String(i+1);
+        rows[i].setAttribute("data-idx", String(i));
+      }
+    }
+
+    function addExtraRow(name, amount){
+      var list = $("extraList");
+      var tpl = $("extraRowTpl");
+      if(!list || !tpl) return;
+      var n = (list.querySelectorAll(".extra-row").length) + 1;
+      var html = tpl.innerHTML;
+      html = html.replace(/__IDX__/g, String(n-1)).replace(/__N__/g, String(n));
+      var wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      var row = wrap.firstElementChild;
+      if(!row) return;
+      list.appendChild(row);
+
+      var nameEl = row.querySelector(".extraName");
+      var amtEl = row.querySelector(".extraAmt");
+      var del = row.querySelector(".delExtra");
+
+      if(nameEl && name) nameEl.value = String(name);
+      if(amtEl && (amount === 0 || amount)) amtEl.value = String(amount);
+
+      function onAny(){ calc(); }
+      if(nameEl){ nameEl.addEventListener("input", onAny); nameEl.addEventListener("change", onAny); }
+      if(amtEl){ amtEl.addEventListener("input", onAny); amtEl.addEventListener("change", onAny); }
+      if(del){
+        del.addEventListener("click", function(){
+          try{ row.remove(); }catch(e){ if(row.parentNode) row.parentNode.removeChild(row); }
+          renumberExtraRows();
+          calc();
+        });
+      }
+
+      renumberExtraRows();
+      calc();
+    }
+
+    function setExtrasToUI(items){
+      var list = $("extraList");
+      if(!list) return;
+      list.innerHTML = "";
+      for(var i=0;i<(items||[]).length;i++) addExtraRow(items[i].name, items[i].amount);
+      renumberExtraRows();
+      calc();
+    }
+
+    function renumberResizeRows(){
+      var list = $("resizeList");
+      if(!list) return;
+      var rows = list.querySelectorAll(".resize-row");
+      for(var i=0;i<rows.length;i++){
+        var first = rows[i].children && rows[i].children[0];
+        if(first) first.textContent = String(i+1);
+        rows[i].setAttribute("data-idx", String(i));
+      }
+    }
+
+    function addResizeRow(fmt, k){
+      var list = $("resizeList");
+      var tpl = $("resizeRowTpl");
+      if(!list || !tpl) return;
+      var n = (list.querySelectorAll(".resize-row").length) + 1;
+      var html = tpl.innerHTML;
+      html = html.replace(/__IDX__/g, String(n-1)).replace(/__N__/g, String(n));
+      var wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      var row = wrap.firstElementChild;
+      if(!row) return;
+      list.appendChild(row);
+
+      var sel = row.querySelector(".resizeFormat");
+      var inp = row.querySelector(".resizeK");
+      var del = row.querySelector(".delResize");
+
+      if(sel && fmt) sel.value = String(fmt);
+      if(inp){
+        if(k === 0 || k){ inp.value = String(k); }
+        else inp.value = String(num("formatK") || 0.8);
+      }
+
+      function onAny(){ calc(); }
+      if(sel){ sel.addEventListener("change", onAny); sel.addEventListener("input", onAny); }
+      if(inp){ inp.addEventListener("change", onAny); inp.addEventListener("input", onAny); }
+      if(del){
+        del.addEventListener("click", function(){
+          try{ row.remove(); }catch(e){ if(row.parentNode) row.parentNode.removeChild(row); }
+          renumberResizeRows();
+          calc();
+        });
+      }
+
+      renumberResizeRows();
+      calc();
+    }
+
+    function setResizesToUI(resizes){
+      var list = $("resizeList");
+      if(!list) return;
+      list.innerHTML = "";
+      for(var i=0;i<(resizes||[]).length;i++) addResizeRow(resizes[i].format, resizes[i].k);
+      renumberResizeRows();
+      calc();
+    }
+
+    function getFxDate(){
+      var el = $("fx");
+      return (el && el.dataset && el.dataset.fxDate) ? String(el.dataset.fxDate) : "";
+    }
+
+    function setFxDate(dateStr){
+      var el = $("fx");
+      if(el && el.dataset){
+        if(dateStr) el.dataset.fxDate = String(dateStr);
+        else delete el.dataset.fxDate;
+      }
+    }
+
+    function setFxMeta(dateStr, rate){
+      var meta = $("fxMeta");
+      if(!meta) return;
+      if(dateStr){
+        meta.textContent = "Mono buy (" + dateStr + "): " + rate;
+      } else {
+        meta.textContent = "";
+      }
+    }
+
+    function calc(){
+      var currency = $("currency").value;
+      var fx = num("fx") || 40;
+      var fxDate = getFxDate();
+
+      var inputs = {
+        seconds: num("seconds"),
+        ratePerSec: num("ratePerSec"),
+        primaryFormat: $("primaryFormat") ? $("primaryFormat").value : "16:9",
+        formatK: (num("formatK") || 0.8),
+        resizes: getResizesFromUI(),
+        extraRenders: num("extraRenders"),
+        renderRate: num("renderRate"),
+        hardPct: num("hardPct"),
+        hardK: (num("hardK") || 1),
+        rushK: (num("rushK") || 1),
+        scriptEditCount: num("scriptEditCount"),
+        scriptEditPrice: num("scriptEditPrice"),
+        scriptFullCount: num("scriptFullCount"),
+        scriptFullPrice: num("scriptFullPrice"),
+        lipsyncSec: num("lipsyncSec"),
+        lipsyncRate: num("lipsyncRate"),
+        vfxSec: num("vfxSec"),
+        vfxRate: num("vfxRate"),
+        extraItems: getExtrasFromUI(),
+        markupOn: $("markupOn").checked,
+        markupPct: num("markupPct"),
+        taxOn: $("taxOn").checked,
+        taxPct: num("taxPct")
+      };
+
+      var s = compute(inputs);
+
+      // Update extras total field
+      var exTotalEl = $("extraFixedTotal");
+      if(exTotalEl) exTotalEl.value = String(Math.round(s.extraFixedTotal || 0));
+
+      var total = (currency === "UAH") ? (s.totalUSD * fx) : s.totalUSD;
+      $("baseHint").textContent = "База (без множників): " + s.seconds + " сек × " + s.ratePerSec + "$/сек = " + Math.round(s.baseUSD) + "$";
+      $("total").textContent = money(total, currency);
+
+      renderTimeline(s);
+
+      var fmtInfo = summarizeFormats(s.primaryFormat, s.resizes);
+      var fmtLine = (s.resizes && s.resizes.length)
+        ? ("Формати: " + fmtInfo.text)
+        : ("Формати: 1× " + formatLabel(s.primaryFormat));
+
+      var compLine = (s.hardPct > 0)
+        ? ("Складність: " + Math.round(s.hardPct*100) + "% складне (x" + s.hardK + ") => загальний x" + s.complexityK.toFixed(2))
+        : "Складність: все легке (x1)";
+      var rushLine = (s.rushK > 1) ? ("Терміновість: x" + s.rushK.toFixed(2)) : "Терміновість: стандарт (x1)";
+      $("summary").textContent = fmtLine + " • " + compLine + " • " + rushLine;
+
+      var lines = [];
+      lines.push(["База (без множників)", s.seconds + "×" + s.ratePerSec + "$ = " + Math.round(s.baseUSD) + "$"]);
+      if(s.hardPct > 0) lines.push(["Множник складності", "x" + s.complexityK.toFixed(2)]);
+      if(s.rushK > 1) lines.push(["Множник терміновості", "x" + s.rushK.toFixed(2)]);
+
+      lines.push(["1-й формат (" + formatLabel(s.primaryFormat) + ")", Math.round(s.coreFirstUSD) + "$"]);
+      if(s.resizes && s.resizes.length){
+        for(var ri=0;ri<s.resizes.length;ri++){
+          var rr = s.resizes[ri];
+          var add = s.coreFirstUSD * rr.k;
+          lines.push(["Resize #" + (ri+1) + ": " + formatLabel(rr.format) + " (" + Math.round(rr.k*100) + "%)", "+ " + Math.round(add) + "$"]);
+        }
+        lines.push(["Разом додаткові формати", Math.round(s.extraFormatsUSD) + "$"]);
+      }
+      lines.push(["Разом формати", Math.round(s.coreFormatsUSD) + "$"]);
+
+      if(s.extraRenders > 0 && s.renderRate > 0){
+        lines.push(["Додаткові рендери", s.extraRenders + " × " + s.seconds + "сек × " + s.renderRate + "$ = " + Math.round(s.rendersUSD) + "$"]);
+      }
+      if(s.scriptsUSD > 0){
+        if(s.scriptEdit > 0) lines.push(["Сценарій: каркас+допрац.", Math.round(s.scriptEdit) + "$"]);
+        if(s.scriptFull > 0) lines.push(["Сценарій: під ключ", Math.round(s.scriptFull) + "$"]);
+      }
+      if(s.lipsyncUSD > 0){
+        lines.push(["Ліпсінг", s.lipsyncSec + "сек × " + s.lipsyncRate + "$ = " + Math.round(s.lipsyncUSD) + "$"]);
+      }
+      if(s.vfxUSD > 0){
+        lines.push(["VFX / пост", s.vfxSec + "сек × " + s.vfxRate + "$ = " + Math.round(s.vfxUSD) + "$"]);
+      }
+      if(s.extraItems && s.extraItems.length){
+        for(var ei=0;ei<s.extraItems.length;ei++){
+          var it = s.extraItems[ei];
+          var nm = it.name ? (" - " + it.name) : "";
+          lines.push(["Додаткові витрати #" + (ei+1) + nm, Math.round(it.amount) + "$"]);
+        }
+        lines.push(["Разом додаткові витрати", Math.round(s.extraFixedTotal) + "$"]);
+      }
+
+      lines.push(["Проміжний підсумок", Math.round(s.subtotalUSD) + "$"]);
+      if(s.markupUSD > 0){
+        lines.push(["Маркап", (s.markupPct*100).toFixed(1) + "% = " + Math.round(s.markupUSD) + "$"]);
+      }
+      lines.push(["Сума до податку", Math.round(s.taxableUSD) + "$"]);
+      if(s.taxUSD > 0){
+        lines.push(["Податок", (s.taxPct*100).toFixed(1) + "% = " + Math.round(s.taxUSD) + "$"]);
+      }
+      lines.push(["ІТОГО", Math.round(s.totalUSD) + "$"]);
+
+      var bd = $("breakdown");
+      bd.innerHTML = "";
+      for(var i=0;i<lines.length;i++){
+        var k = lines[i][0];
+        var v = lines[i][1];
+        var div = document.createElement("div");
+        div.className = "lineitem";
+        div.innerHTML = "<span>" + k + "</span><span>" + v + "</span>";
+        bd.appendChild(div);
+      }
+
+      calc._state = {
+        seconds: s.seconds,
+        ratePerSec: s.ratePerSec,
+        baseUSD: s.baseUSD,
+        hardPct: s.hardPct,
+        hardK: s.hardK,
+        complexityK: s.complexityK,
+        rushK: s.rushK,
+        primaryFormat: s.primaryFormat,
+        resizes: s.resizes,
+        formatK: (inputs.formatK || 0.8),
+        coreFirstUSD: s.coreFirstUSD,
+        extraFormatsUSD: s.extraFormatsUSD,
+        coreFormatsUSD: s.coreFormatsUSD,
+        extraRenders: s.extraRenders,
+        renderRate: s.renderRate,
+        rendersUSD: s.rendersUSD,
+        scriptEdit: s.scriptEdit,
+        scriptFull: s.scriptFull,
+        scriptsUSD: s.scriptsUSD,
+        lipsyncSec: s.lipsyncSec,
+        lipsyncRate: s.lipsyncRate,
+        lipsyncUSD: s.lipsyncUSD,
+        vfxSec: s.vfxSec,
+        vfxRate: s.vfxRate,
+        vfxUSD: s.vfxUSD,
+        extraItems: s.extraItems,
+        extraFixedTotal: s.extraFixedTotal,
+        subtotalUSD: s.subtotalUSD,
+        markupOn: s.markupOn,
+        markupPct: s.markupPct,
+        markupUSD: s.markupUSD,
+        taxableUSD: s.taxableUSD,
+        taxOn: s.taxOn,
+        taxPct: s.taxPct,
+        taxUSD: s.taxUSD,
+        totalUSD: s.totalUSD,
+        currency: currency,
+        fx: fx,
+        fxDate: fxDate
+      };
+
+      // --- FX line under breakdown (restored) ---
+      try{
+        var fxLine = $("fxLine");
+        if(fxLine){
+          // Always show date if we have it; show курс/джерело only in UAH mode
+          if(currency === "UAH"){
+            var dfx = fxDate ? (" • дата: " + fxDate) : "";
+            fxLine.textContent = "Курс: " + fx + " грн за 1 USD" + dfx;
+          } else {
+            // USD mode: show only date (no source/mono text). If no date - hide.
+            if(fxDate) fxLine.textContent = "Дата: " + fxDate;
+            else fxLine.textContent = "";
+          }
+        }
+      }catch(eFxLine){}
+
+      // --- Update Bento blocks (main page) ---
+      try{
+        var durEl = $("bentoDuration");
+        if(durEl) durEl.textContent = String(s.seconds) + " сек";
+
+        var fmtEl = $("bentoFormats");
+        if(fmtEl){
+          var fi = summarizeFormats(s.primaryFormat, s.resizes);
+          var partsFmt = (fi && fi.parts && fi.parts.length) ? fi.parts : ["1× " + formatLabel(s.primaryFormat)];
+          fmtEl.innerHTML = partsFmt.map(function(x){ return escapeHtml(x); }).join("<br>");
+        }
+
+        var hardEl = $("bentoHard");
+        if(hardEl){
+          var hardPctInt = Math.round((s.hardPct || 0) * 100);
+          hardEl.textContent = hardPctInt + "% складне";
+        }
+
+        var lipWrap = $("bentoLipWrap");
+        var vfxWrap = $("bentoVfxWrap");
+        var scriptWrap = $("bentoScriptWrap");
+        var rendersWrap = $("bentoRendersWrap");
+        var extrasWrap = $("bentoExtrasWrap");
+
+        if(lipWrap){
+          var hasLip = (s.lipsyncSec || 0) > 0;
+          lipWrap.style.display = hasLip ? "block" : "none";
+          if(hasLip && $("bentoLip")) $("bentoLip").textContent = String(Math.round(s.lipsyncSec)) + "с";
+        }
+        if(vfxWrap){
+          var hasVfx = (s.vfxSec || 0) > 0;
+          vfxWrap.style.display = hasVfx ? "block" : "none";
+          if(hasVfx && $("bentoVfx")) $("bentoVfx").textContent = String(Math.round(s.vfxSec)) + "с";
+        }
+        if(scriptWrap){
+          var hasScript = (s.scriptsUSD || 0) > 0;
+          scriptWrap.style.display = hasScript ? "block" : "none";
+          if(hasScript && $("bentoScript")){
+            var sp = [];
+            if((s.scriptEdit || 0) > 0) sp.push("Каркас: " + Math.round(s.scriptEdit) + "$");
+            if((s.scriptFull || 0) > 0) sp.push("Під ключ: " + Math.round(s.scriptFull) + "$");
+            if(sp.length === 0) sp.push("Сценарій");
+            $("bentoScript").innerHTML = sp.map(function(x){ return escapeHtml(x); }).join("<br>");
+          }
+        }
+        if(rendersWrap){
+          var hasRenders = (s.rendersUSD || 0) > 0;
+          rendersWrap.style.display = hasRenders ? "block" : "none";
+          if(hasRenders && $("bentoRenders")){
+            $("bentoRenders").textContent = Math.round(s.rendersUSD) + "$ (" + s.extraRenders + " рендер(и))";
+          }
+        }
+        if(extrasWrap){
+          var hasExtras = (s.extraFixedTotal || 0) > 0;
+          extrasWrap.style.display = hasExtras ? "block" : "none";
+          if(hasExtras && $("bentoExtras")){
+            var items = s.extraItems || [];
+            var linesEx = [];
+            
+
+            var cap = 6;
+            for(var ei2=0;ei2<items.length && ei2<cap;ei2++){
+              var it2 = items[ei2];
+              var nm2 = it2.name ? (" - " + String(it2.name)) : "";
+              linesEx.push(Math.round(it2.amount) + "$" + nm2);
+            }
+            if(items.length > cap){
+              linesEx.push("+" + (items.length - cap) + " ще");
+            }
+
+            $("bentoExtras").innerHTML = linesEx.map(function(x){ return escapeHtml(x); }).join("<br>");
+          }
+        }
+
+        // Price rows
+        var rowsHost = $("bentoPriceRows");
+        if(rowsHost){
+          rowsHost.innerHTML = "";
+          function addRow(k, v){
+            var div = document.createElement("div");
+            div.style.display = "flex";
+            div.style.justifyContent = "space-between";
+            div.style.gap = "10px";
+            div.style.padding = "8px 0";
+            div.style.borderTop = "1px dashed rgba(17,24,39,.25)";
+            var lk = document.createElement("div");
+            lk.textContent = k;
+            lk.style.color = "var(--muted)";
+            lk.style.fontWeight = "700";
+            var lv = document.createElement("div");
+            lv.textContent = v;
+            lv.style.fontWeight = "950";
+            lv.style.fontFamily = "var(--font-head)";
+            div.appendChild(lk);
+            div.appendChild(lv);
+            rowsHost.appendChild(div);
+          }
+          // first row without top border feel
+          addRow("Вартість виробництва", String(Math.round(s.subtotalUSD)) + "$");
+          if(s.markupUSD > 0) addRow("Маркап", "+ " + Math.round(s.markupUSD) + "$ (" + (s.markupPct*100).toFixed(1) + "%)");
+          addRow("Сума до податку", String(Math.round(s.taxableUSD)) + "$");
+          if(s.taxUSD > 0) addRow("Податки", "+ " + Math.round(s.taxUSD) + "$ (" + (s.taxPct*100).toFixed(1) + "%)");
+          // remove first border
+          if(rowsHost.firstChild) rowsHost.firstChild.style.borderTop = "none";
+        }
+
+        // Total + note
+        var bt = $("bentoTotal");
+        if(bt) bt.textContent = String(Math.round(s.totalUSD)) + "$";
+        var bn = $("bentoNote");
+        if(bn){
+          if(currency === "UAH"){
+            var totalUAH = Math.round(s.totalUSD * fx);
+            var d2 = fxDate ? (" на " + fxDate) : "";
+            bn.textContent = "≈ " + totalUAH + " грн (курс " + fx + d2 + ")";
+          } else {
+            bn.textContent = "Підсумок з урахуванням маркапу/податків (якщо увімкнено)";
+          }
+        }
+      }catch(eBento){}
+    }
+
+    // --- Copy estimate ---
+    function buildEstimateText(){
+      var s = calc._state;
+      if(!s) return "";
+      var lines = [];
+      lines.push("Калькуляція AI-відео");
+      lines.push("Тривалість: " + s.seconds + " сек");
+      lines.push("База (без множників): " + s.ratePerSec + "$/сек -> " + Math.round(s.baseUSD) + "$");
+      lines.push("Складність: x" + s.complexityK.toFixed(2) + " | Терміновість: x" + s.rushK.toFixed(2));
+      lines.push("1-й формат (" + formatLabel(s.primaryFormat) + ") (з множниками): " + Math.round(s.coreFirstUSD) + "$");
+      if(s.resizes && s.resizes.length){
+        for(var ri=0;ri<s.resizes.length;ri++){
+          var rr = s.resizes[ri];
+          lines.push("Resize #" + (ri+1) + ": " + formatLabel(rr.format) + " (" + Math.round(rr.k*100) + "%)");
+        }
+        lines.push("Разом додаткові формати: " + Math.round(s.extraFormatsUSD) + "$");
+      }
+      lines.push("Разом формати: " + Math.round(s.coreFormatsUSD) + "$");
+      if(s.rendersUSD > 0) lines.push("Додаткові рендери: " + Math.round(s.rendersUSD) + "$");
+      if(s.scriptsUSD > 0){
+        if(s.scriptEdit > 0) lines.push("Сценарій (каркас+допрац.): " + Math.round(s.scriptEdit) + "$");
+        if(s.scriptFull > 0) lines.push("Сценарій (під ключ): " + Math.round(s.scriptFull) + "$");
+      }
+      if(s.lipsyncUSD > 0) lines.push("Ліпсінг: " + s.lipsyncSec + "сек -> " + Math.round(s.lipsyncUSD) + "$");
+      if(s.vfxUSD > 0) lines.push("VFX/пост: " + s.vfxSec + "сек -> " + Math.round(s.vfxUSD) + "$");
+      if(s.extraItems && s.extraItems.length){
+        for(var ei=0;ei<s.extraItems.length;ei++){
+          var it = s.extraItems[ei];
+          lines.push("Додаткові витрати #" + (ei+1) + (it.name ? (" - " + it.name) : "") + ": " + Math.round(it.amount) + "$");
+        }
+        lines.push("Разом додаткові витрати: " + Math.round(s.extraFixedTotal) + "$");
+      }
+      lines.push("Проміжний підсумок: " + Math.round(s.subtotalUSD) + "$");
+      if(s.markupUSD > 0) lines.push("Маркап: " + (s.markupPct*100).toFixed(1) + "% -> " + Math.round(s.markupUSD) + "$");
+      lines.push("Сума до податку: " + Math.round(s.taxableUSD) + "$");
+      if(s.taxUSD > 0) lines.push("Податок: " + (s.taxPct*100).toFixed(1) + "% -> " + Math.round(s.taxUSD) + "$");
+      lines.push("ІТОГО: " + Math.round(s.totalUSD) + "$");
+
+      if(s.currency === "UAH"){
+        var totalUAH = Math.round(s.totalUSD * s.fx);
+        var d = s.fxDate ? (" на " + s.fxDate) : "";
+        lines.push("Для довідки: ≈ " + totalUAH + " грн (курс " + s.fx + d + ")");
+      }
+      if(s.fxDate){
+        lines.push("Курс джерело: Monobank buy (USD/UAH) • Дата: " + s.fxDate);
+      }
+      return lines.join("\n");
+    }
+
+    function copyEstimate(){
+      var text = buildEstimateText();
+      try{
+        navigator.clipboard.writeText(text).then(function(){ toast("кошторис скопійовано"); }, function(){
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          ta.remove();
+          toast("кошторис скопійовано");
+        });
+      }catch(e){
+        var ta2 = document.createElement("textarea");
+        ta2.value = text;
+        document.body.appendChild(ta2);
+        ta2.select();
+        document.execCommand("copy");
+        ta2.remove();
+        toast("кошторис скопійовано");
+      }
+    }
+    // --- PDF removed: info blocks are now shown on the main page (bento below).
+    // NOTE: intentionally no document.write/buildPdfHtml/exportPdf here.
+
+    // --- Presets ---
+    function uid(){
+      return "p_" + Math.random().toString(36).slice(2,10) + Date.now().toString(36).slice(2,6);
+    }
+    function nowISO(){ return new Date().toISOString(); }
+
+    function readSinglePreset(){
+      var raw = localStorage.getItem(LS_PRESET);
+      if(!raw) return null;
+      try{ return JSON.parse(raw); }catch(e){ return null; }
+    }
+
+    function readPresets(){
+      var raw = localStorage.getItem(LS_PRESETS);
+      if(!raw) return [];
+      try{
+        var arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+      }catch(e){ return []; }
+    }
+
+    function writePresets(arr){
+      localStorage.setItem(LS_PRESETS, JSON.stringify(arr));
+    }
+
+    function normalizePreset(p){
+      var obj = {};
+      for(var k in p){ if(Object.prototype.hasOwnProperty.call(p,k)) obj[k] = p[k]; }
+      obj.id = String(obj.id || uid());
+      obj.name = String(obj.name || "Без назви").slice(0, 80);
+      obj.updatedAt = obj.updatedAt || nowISO();
+      obj.createdAt = obj.createdAt || obj.updatedAt;
+      obj.data = (obj.data && typeof obj.data === "object") ? obj.data : {};
+      return obj;
+    }
+
+    function captureCurrentForm(){
+      return {
+        ratePerSec: num("ratePerSec"),
+        seconds: num("seconds"),
+        primaryFormat: $("primaryFormat") ? $("primaryFormat").value : "16:9",
+        resizes: getResizesFromUI(),
+        formatK: num("formatK"),
+        extraRenders: num("extraRenders"),
+        renderRate: num("renderRate"),
+        rushPreset: $("rushPreset").value,
+        rushK: num("rushK"),
+        scriptEditCount: num("scriptEditCount"),
+        scriptEditPrice: num("scriptEditPrice"),
+        scriptFullCount: num("scriptFullCount"),
+        scriptFullPrice: num("scriptFullPrice"),
+        hardPct: num("hardPct"),
+        hardK: num("hardK"),
+        lipsyncSec: num("lipsyncSec"),
+        lipsyncRate: num("lipsyncRate"),
+        vfxSec: num("vfxSec"),
+        vfxRate: num("vfxRate"),
+        extraItems: getExtrasFromUI(),
+        markupOn: $("markupOn").checked,
+        markupPct: num("markupPct"),
+        taxOn: $("taxOn").checked,
+        taxPct: num("taxPct"),
+        currency: $("currency").value,
+        fx: num("fx"),
+        fxDate: getFxDate()
+      };
+    }
+
+    function applyPresetData(data){
+      var p = data || {};
+
+      if(p.resizes && Array.isArray(p.resizes)) setResizesToUI(p.resizes);
+      else setResizesToUI([]);
+
+      if(p.extraItems && Array.isArray(p.extraItems)) setExtrasToUI(p.extraItems);
+      else setExtrasToUI([]);
+
+      for(var k in p){
+        if(!Object.prototype.hasOwnProperty.call(p,k)) continue;
+        if(k === "resizes" || k === "extraItems") continue;
+        var el = $(k);
+        if(!el) continue;
+        if(el.type === "checkbox") el.checked = !!p[k];
+        else el.value = p[k];
+      }
+
+      if(p.fxDate){
+        setFxDate(p.fxDate);
+        setFxMeta(p.fxDate, num("fx"));
+      } else {
+        setFxDate("");
+        setFxMeta("", "");
+      }
+
+      $("secondsBox").value = $("seconds").value;
+      if(p.rushPreset != null) $("rushPreset").value = String(p.rushPreset);
+      calc();
+    }
+
+    function presetLabel(pr){
+      var name = pr.name || "Без назви";
+      var dt = pr.updatedAt ? pr.updatedAt.slice(0,10) : "";
+      return dt ? (name + " (" + dt + ")") : name;
+    }
+
+    function fillPresetSelect(selectedId){
+      var sel = $("presetSelect");
+      if(!sel) return;
+      var presets = readPresets().slice().sort(function(a,b){
+        var aa = (b.updatedAt || "");
+        var bb = (a.updatedAt || "");
+        return aa.localeCompare(bb);
+      });
+      sel.innerHTML = "";
+
+      if(presets.length === 0){
+        var opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "(немає пресетів)";
+        sel.appendChild(opt);
+        $("presetName").value = "";
+        return;
+      }
+
+      for(var i=0;i<presets.length;i++){
+        var pr = presets[i];
+        var opt2 = document.createElement("option");
+        opt2.value = pr.id;
+        opt2.textContent = presetLabel(pr);
+        sel.appendChild(opt2);
+      }
+
+      var last = selectedId || localStorage.getItem(LS_LAST_PRESET_ID) || presets[0].id;
+      var exists = false;
+      for(var j=0;j<presets.length;j++){ if(presets[j].id === last) { exists = true; break; } }
+      sel.value = exists ? last : presets[0].id;
+
+      var current = null;
+      for(var k=0;k<presets.length;k++){ if(presets[k].id === sel.value) { current = presets[k]; break; } }
+      if(current) $("presetName").value = current.name;
+    }
+
+    function migrateSinglePresetIfNeeded(){
+      var existing = readPresets();
+      if(existing.length > 0) return;
+      var single = readSinglePreset();
+      if(!single) return;
+      var migrated = normalizePreset({
+        name: "Мій пресет (міграція)",
+        createdAt: nowISO(),
+        updatedAt: nowISO(),
+        data: single
+      });
+      writePresets([migrated]);
+      localStorage.setItem(LS_LAST_PRESET_ID, migrated.id);
+    }
+
+    function savePreset(){
+      var presets = readPresets();
+      var selEl = $("presetSelect");
+      var selId = selEl ? selEl.value : "";
+      var nameInput = String($("presetName").value || "").trim();
+      var data = captureCurrentForm();
+
+      if(!selId || presets.length === 0){
+        var created = normalizePreset({ name: nameInput || "Новий пресет", data: data });
+        writePresets([created].concat(presets));
+        localStorage.setItem(LS_LAST_PRESET_ID, created.id);
+        fillPresetSelect(created.id);
+        toast("Пресет збережено");
+        return;
+      }
+
+      var idx = -1;
+      for(var i=0;i<presets.length;i++){ if(presets[i].id === selId){ idx = i; break; } }
+      if(idx === -1){
+        var created2 = normalizePreset({ name: nameInput || "Новий пресет", data: data });
+        writePresets([created2].concat(presets));
+        localStorage.setItem(LS_LAST_PRESET_ID, created2.id);
+        fillPresetSelect(created2.id);
+        toast("Пресет збережено");
+        return;
+      }
+
+      var next = presets.slice();
+      var updated = normalizePreset({
+        id: next[idx].id,
+        name: nameInput || next[idx].name || "Без назви",
+        createdAt: next[idx].createdAt,
+        updatedAt: nowISO(),
+        data: data
+      });
+      next[idx] = updated;
+      writePresets(next);
+      localStorage.setItem(LS_LAST_PRESET_ID, updated.id);
+      fillPresetSelect(updated.id);
+      toast("Пресет оновлено");
+    }
+
+    function saveAsPreset(){
+      var presets = readPresets();
+      var nameInput = String($("presetName").value || "").trim();
+      var data = captureCurrentForm();
+      var created = normalizePreset({ name: nameInput || "Новий пресет", data: data });
+      writePresets([created].concat(presets));
+      localStorage.setItem(LS_LAST_PRESET_ID, created.id);
+      fillPresetSelect(created.id);
+      toast("Збережено як новий");
+    }
+
+    function loadPreset(){
+      var presets = readPresets();
+      var selEl = $("presetSelect");
+      var selId = selEl ? selEl.value : "";
+      var pr = null;
+      for(var i=0;i<presets.length;i++){ if(presets[i].id === selId){ pr = presets[i]; break; } }
+      if(!pr){ toast("Пресет не знайдено"); return; }
+      applyPresetData(pr.data);
+      localStorage.setItem(LS_LAST_PRESET_ID, pr.id);
+      $("presetName").value = pr.name || "";
+      toast("Пресет завантажено");
+    }
+
+    function presetDeleteNext(existing, selId){
+      var next = [];
+      for(var i=0;i<(existing||[]).length;i++){ if(existing[i].id !== selId) next.push(existing[i]); }
+      var newSel = next.length ? next[0].id : "";
+      return { next: next, newSel: newSel };
+    }
+
+    function deletePreset(){
+      var presets = readPresets();
+      var selEl = $("presetSelect");
+      var selId = selEl ? selEl.value : "";
+      var pr = null;
+      for(var i=0;i<presets.length;i++){ if(presets[i].id === selId){ pr = presets[i]; break; } }
+      if(!pr){ toast("Нічого видаляти"); return; }
+
+      var btn = $("deletePreset");
+      var now = Date.now();
+      var pending = deletePreset._pending;
+      if(!pending || pending.id !== selId || (now - pending.t) > 3000){
+        deletePreset._pending = { id: selId, t: now };
+        if(btn){
+          var prevText = btn.textContent;
+          btn.dataset.prevText = prevText;
+          btn.textContent = "Підтвердити видалення";
+          btn.classList.add("primary");
+          setTimeout(function(){
+            if(deletePreset._pending && deletePreset._pending.id === selId){
+              deletePreset._pending = null;
+              btn.textContent = btn.dataset.prevText || "Видалити";
+              btn.classList.remove("primary");
+            }
+          }, 3100);
+        }
+        toast("Натисни ще раз, щоб видалити: " + pr.name);
+        return;
+      }
+
+      deletePreset._pending = null;
+      if(btn){
+        btn.textContent = btn.dataset.prevText || "Видалити";
+        btn.classList.remove("primary");
+      }
+
+      var res = presetDeleteNext(presets, selId);
+      writePresets(res.next);
+      localStorage.setItem(LS_LAST_PRESET_ID, res.newSel);
+      fillPresetSelect(res.newSel);
+      toast("Видалено");
+    }
+
+    function exportPresets(){
+      var presets = readPresets();
+      var payload = JSON.stringify({ version: 1, exportedAt: nowISO(), presets: presets }, null, 2);
+      try{
+        navigator.clipboard.writeText(payload).then(function(){ toast("JSON скопійовано"); }, function(){
+          var ta = document.createElement("textarea");
+          ta.value = payload;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          ta.remove();
+          toast("JSON скопійовано");
+        });
+      }catch(e){
+        var ta2 = document.createElement("textarea");
+        ta2.value = payload;
+        document.body.appendChild(ta2);
+        ta2.select();
+        document.execCommand("copy");
+        ta2.remove();
+        toast("JSON скопійовано");
+      }
+    }
+
+    function parseImportBox(){
+      var raw = String($("importBox").value || "").trim();
+      if(!raw) throw new Error("Порожній JSON");
+      var obj = JSON.parse(raw);
+      var arr = Array.isArray(obj) ? obj : (Array.isArray(obj.presets) ? obj.presets : null);
+      if(!arr) throw new Error("Невірний формат JSON (очікується масив або {presets:[...]})");
+      var out = [];
+      for(var i=0;i<arr.length;i++) out.push(normalizePreset(arr[i]));
+      return out;
+    }
+
+    function mergePresets(existing, incoming){
+      var byId = {};
+      var keys = [];
+
+      for(var i=0;i<existing.length;i++){
+        var p = normalizePreset(existing[i]);
+        byId[p.id] = p;
+        keys.push(p.id);
+      }
+
+      function hasKey(id){ return Object.prototype.hasOwnProperty.call(byId, id); }
+
+      for(var j=0;j<incoming.length;j++){
+        var np = normalizePreset(incoming[j]);
+        if(hasKey(np.id)){
+          var old = byId[np.id];
+          var a = (old.updatedAt || "");
+          var b = (np.updatedAt || "");
+          byId[np.id] = (b >= a) ? np : old;
+        } else {
+          var sameName = null;
+          for(var k=0;k<keys.length;k++){
+            var ex = byId[keys[k]];
+            if((ex.name || "").toLowerCase() === (np.name || "").toLowerCase()) { sameName = ex; break; }
+          }
+          if(sameName) np.id = uid();
+          byId[np.id] = np;
+          keys.push(np.id);
+        }
+      }
+
+      var merged = [];
+      for(var m=0;m<keys.length;m++) merged.push(byId[keys[m]]);
+      merged.sort(function(a,b){ return (b.updatedAt||"").localeCompare(a.updatedAt||""); });
+      return merged;
+    }
+
+    function importMerge(){
+      try{
+        var incoming = parseImportBox();
+        var existing = readPresets();
+        var merged = mergePresets(existing, incoming);
+        writePresets(merged);
+        var sel = merged.length ? merged[0].id : "";
+        localStorage.setItem(LS_LAST_PRESET_ID, sel);
+        fillPresetSelect(sel);
+        toast("Імпорт виконано");
+      }catch(e){ toast(e.message || "Помилка імпорту"); }
+    }
+
+    function importReplace(){
+      try{
+        var incoming = parseImportBox();
+        writePresets(incoming);
+        var sel = incoming.length ? incoming[0].id : "";
+        localStorage.setItem(LS_LAST_PRESET_ID, sel);
+        fillPresetSelect(sel);
+        toast("Замінено всі пресети");
+      }catch(e){ toast(e.message || "Помилка імпорту"); }
+    }
+
+    function resetFields(){
+      $("ratePerSec").value = 10;
+      $("seconds").value = 0;
+      $("secondsBox").value = 0;
+      $("currency").value = "USD";
+      $("fx").value = 40;
+      setFxDate("");
+      setFxMeta("", "");
+
+      $("extraRenders").value = "";
+      $("scriptEditCount").value = "";
+      $("scriptFullCount").value = "";
+      $("hardPct").value = "";
+      $("lipsyncSec").value = "";
+      $("vfxSec").value = "";
+      try{ setExtrasToUI([]); }catch(e){}
+      var exTotalEl = $("extraFixedTotal");
+      if(exTotalEl) exTotalEl.value = "0";
+
+      $("primaryFormat").value = "16:9";
+
+      $("formatK").value = 0.8;
+      setResizesToUI([]);
+      $("renderRate").value = 1;
+      $("rushPreset").value = "1";
+      $("rushK").value = 1;
+      $("scriptEditPrice").value = 75;
+      $("scriptFullPrice").value = 125;
+      $("hardK").value = 2;
+      $("lipsyncRate").value = 1;
+      $("vfxRate").value = 5;
+      $("markupOn").checked = false;
+      $("markupPct").value = 10;
+      $("taxOn").checked = false;
+      $("taxPct").value = 6;
+
+      calc();
+      toast("Скинуто");
+    }
+
+    function wire(){
+      // --- FX (Monobank USD buy) ---
+      function fxDayKey(d){
+        var y=d.getFullYear();
+        var m=String(d.getMonth()+1); if(m.length<2) m='0'+m;
+        var dd=String(d.getDate()); if(dd.length<2) dd='0'+dd;
+        return y+'-'+m+'-'+dd;
+      }
+
+      function readFxCache(){
+        try{
+          var raw = localStorage.getItem('ai_video_calc_fx_mono');
+          if(!raw) return null;
+          return JSON.parse(raw);
+        }catch(e){ return null; }
+      }
+
+      function writeFxCache(obj){
+        try{ localStorage.setItem('ai_video_calc_fx_mono', JSON.stringify(obj)); }catch(e){}
+      }
+
+      function fetchMonoFx(force){
+        var now = new Date();
+        var today = fxDayKey(now);
+        if(!force){
+          var cached = readFxCache();
+          if(cached && cached.date === today && cached.rate){
+            $("fx").value = cached.rate;
+            setFxDate(cached.date);
+            setFxMeta(cached.date, cached.rate);
+            calc();
+            return Promise.resolve(cached);
+          }
+        }
+        return fetch('https://api.monobank.ua/bank/currency', {cache:'no-store'})
+          .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+          .then(function(arr){
+            var rate = null;
+            for(var i=0;i<arr.length;i++){
+              var it = arr[i];
+              if(it && it.currencyCodeA === 840 && it.currencyCodeB === 980){
+                // BUY is the lower rate
+                if(it.rateBuy) rate = it.rateBuy;
+                else if(it.rateCross) rate = it.rateCross;
+                break;
+              }
+            }
+            if(!rate) throw new Error('Не знайдено USD/UAH');
+            var rounded = Math.round(rate*100)/100;
+            $("fx").value = String(rounded);
+            setFxDate(today);
+            setFxMeta(today, rounded);
+            writeFxCache({date: today, rate: rounded, source:'monobank'});
+            calc();
+            toast('Курс оновлено');
+            return {date: today, rate: rounded};
+          })
+          .catch(function(){
+            toast('Не вдалося оновити курс');
+            var c = readFxCache();
+            if(c && c.date){
+              setFxDate(c.date);
+              setFxMeta(c.date, c.rate);
+            }
+            return null;
+          });
+      }
+
+      var fxBtn = $("fxRefresh");
+      if(fxBtn) fxBtn.addEventListener('click', function(){ fetchMonoFx(true); });
+      fetchMonoFx(false);
+
+      // Manual FX edit should clear the "source date" (so PDF won't claim mono-date)
+      $("fx").addEventListener('input', function(){
+        setFxDate("");
+        setFxMeta("", "");
+        calc();
+      });
+
+      $("seconds").addEventListener("input", function(){ $("secondsBox").value = $("seconds").value; calc(); });
+      $("secondsBox").addEventListener("input", function(){
+        var v = Number($("secondsBox").value || 0);
+        v = clamp(v, 0, 360);
+        $("seconds").value = String(v);
+        calc();
+      });
+
+      $("rushPreset").addEventListener("change", function(){
+        $("rushK").value = $("rushPreset").value;
+        calc();
+      });
+
+      var ids = [
+        "ratePerSec","currency","seconds","secondsBox",
+        "primaryFormat","formatK","extraRenders","renderRate",
+        "rushK","scriptEditCount","scriptEditPrice","scriptFullCount","scriptFullPrice",
+        "hardPct","hardK","lipsyncSec","lipsyncRate","vfxSec","vfxRate",
+        "markupOn","markupPct","taxOn","taxPct"
+      ];
+      for(var i=0;i<ids.length;i++){
+        var el = $(ids[i]);
+        if(!el) continue;
+        el.addEventListener("input", calc);
+        el.addEventListener("change", calc);
+      }
+
+      $("copy").addEventListener("click", copyEstimate);
+      if($("addResize")) $("addResize").addEventListener("click", function(){ addResizeRow("9:16", num("formatK") || 0.8); });
+      if($("addExtra")) $("addExtra").addEventListener("click", function(){ addExtraRow("", ""); });
+      $("reset").addEventListener("click", resetFields);
+
+      // Top reset (danger) opens confirm modal
+      function openResetModal(){
+        var bd = $("resetModal");
+        if(!bd) return;
+        bd.classList.add("open");
+        openResetModal._lastFocus = document.activeElement;
+        // focus first actionable
+        setTimeout(function(){
+          var btn = $("resetNo");
+          try{ if(btn) btn.focus(); }catch(e){}
+        }, 0);
+      }
+      function closeResetModal(){
+        var bd = $("resetModal");
+        if(!bd) return;
+        bd.classList.remove("open");
+        var lf = openResetModal._lastFocus;
+        if(lf && lf.focus){ try{ lf.focus(); }catch(e){} }
+      }
+
+      var resetTop = $("resetTop");
+      if(resetTop){
+        resetTop.classList.add("danger");
+        resetTop.addEventListener("click", openResetModal);
+      }
+
+      var rm = $("resetModal");
+      var rmNo = $("resetNo");
+      var rmYes = $("resetYes");
+
+      if(rmNo) rmNo.addEventListener("click", closeResetModal);
+      if(rmYes) rmYes.addEventListener("click", function(){ closeResetModal(); resetFields(); });
+
+      // Close on backdrop click
+      if(rm){
+        rm.addEventListener("click", function(e){
+          if(e && e.target === rm) closeResetModal();
+        });
+      }
+
+      // Escape key
+      document.addEventListener("keydown", function(e){
+        if(!rm || !rm.classList.contains("open")) return;
+        var key = e.key || e.keyCode;
+        if(key === "Escape" || key === 27){
+          e.preventDefault();
+          closeResetModal();
+        }
+      });
+
+
+      var nums = document.querySelectorAll('input[type="number"]');
+      for(var j=0;j<nums.length;j++){
+        (function(inp){
+          inp.addEventListener("focus", function(){
+            if(inp.value === "0") inp.value = "";
+            setTimeout(function(){ try{ inp.select(); }catch(e){} }, 0);
+          });
+        })(nums[j]);
+      }
+
+      migrateSinglePresetIfNeeded();
+      $("autoLoadPreset").checked = (localStorage.getItem(LS_AUTOLOAD) === "1");
+      fillPresetSelect();
+
+      $("savePreset").addEventListener("click", savePreset);
+      $("saveAsPreset").addEventListener("click", saveAsPreset);
+      $("loadPreset").addEventListener("click", loadPreset);
+      $("deletePreset").addEventListener("click", deletePreset);
+      $("exportPresets").addEventListener("click", exportPresets);
+      $("importMerge").addEventListener("click", importMerge);
+      $("importReplace").addEventListener("click", importReplace);
+
+      $("presetSelect").addEventListener("change", function(){
+        var presets = readPresets();
+        var selId = $("presetSelect").value;
+        var pr = null;
+        for(var i=0;i<presets.length;i++){ if(presets[i].id === selId){ pr = presets[i]; break; } }
+        if(pr) $("presetName").value = pr.name || "";
+        if($("autoLoadPreset").checked) loadPreset();
+      });
+
+      $("autoLoadPreset").addEventListener("change", function(){
+        localStorage.setItem(LS_AUTOLOAD, $("autoLoadPreset").checked ? "1" : "0");
+      });
+
+      if($("autoLoadPreset").checked) loadPreset();
+
+      // IMPORTANT: no forced default resize row; user can keep resizes empty.
+      calc();
+    }
+
+    // --- Basic self-tests (expanded) ---
+    (function runTests(){
+      try{
+        var baseInputs = {
+          seconds: 10,
+          ratePerSec: 10,
+          primaryFormat:"16:9",
+          formatK: 0.8,
+          resizes: [],
+          extraRenders: 0,
+          renderRate: 1,
+          hardPct: 0,
+          hardK: 2,
+          rushK: 1,
+          scriptEditCount: 0,
+          scriptEditPrice: 75,
+          scriptFullCount: 0,
+          scriptFullPrice: 125,
+          lipsyncSec: 0,
+          lipsyncRate: 1,
+          vfxSec: 0,
+          vfxRate: 5,
+          extraItems: [],
+          markupOn: false,
+          markupPct: 10,
+          taxOn: false,
+          taxPct: 6
+        };
+
+        var t1 = compute(baseInputs);
+        console.assert(Math.round(t1.totalUSD) === 100, "Test1 failed: base 10s * $10 should be $100");
+
+        var t2 = compute({
+          seconds: 10, ratePerSec: 10, primaryFormat:"16:9", formatK: 0.8, resizes:[{format:"9:16",k:0.8}],
+          extraRenders: 0, renderRate: 1, hardPct: 0, hardK: 2, rushK: 1,
+          scriptEditCount: 0, scriptEditPrice: 75, scriptFullCount: 0, scriptFullPrice: 125,
+          lipsyncSec: 0, lipsyncRate: 1, vfxSec: 0, vfxRate: 5,
+          extraItems: [], markupOn: false, markupPct: 10, taxOn: false, taxPct: 6
+        });
+        console.assert(Math.round(t2.totalUSD) === 180, "Test2 failed: extra format should add 80% (expected 180)");
+
+        var t3 = compute({
+          seconds: 10, ratePerSec: 10, primaryFormat:"16:9", formatK: 0.8, resizes:[],
+          extraRenders: 0, renderRate: 1, hardPct: 0, hardK: 2, rushK: 1,
+          scriptEditCount: 0, scriptEditPrice: 75, scriptFullCount: 0, scriptFullPrice: 125,
+          lipsyncSec: 0, lipsyncRate: 1, vfxSec: 0, vfxRate: 5,
+          extraItems: [{name:"диктор", amount:50}], markupOn: true, markupPct: 10, taxOn: true, taxPct: 6
+        });
+        // 100 + 50 = 150, markup 10% => 165, tax 6% => 174.9 => round 175
+        console.assert(Math.round(t3.totalUSD) === 175, "Test3 failed: extras should be included before markup and tax");
+
+        var t4 = compute({
+          seconds: 10, ratePerSec: 10, primaryFormat:"16:9", formatK: 0.8, resizes:[],
+          extraRenders: 0, renderRate: 1, hardPct: 50, hardK: 2, rushK: 1,
+          scriptEditCount: 0, scriptEditPrice: 75, scriptFullCount: 0, scriptFullPrice: 125,
+          lipsyncSec: 0, lipsyncRate: 1, vfxSec: 0, vfxRate: 5,
+          extraItems: [], markupOn: false, markupPct: 10, taxOn: false, taxPct: 6
+        });
+        // complexityK = 0.5*1 + 0.5*2 = 1.5, so total 150
+        console.assert(Math.round(t4.totalUSD) === 150, "Test4 failed: 50% hard at x2 should produce x1.5 total => 150");
+
+        var t5 = compute({
+          seconds: 10, ratePerSec: 10, primaryFormat:"16:9", formatK: 0.8, resizes:[],
+          extraRenders: 0, renderRate: 1, hardPct: 0, hardK: 2, rushK: 2,
+          scriptEditCount: 0, scriptEditPrice: 75, scriptFullCount: 0, scriptFullPrice: 125,
+          lipsyncSec: 0, lipsyncRate: 1, vfxSec: 0, vfxRate: 5,
+          extraItems: [], markupOn: false, markupPct: 10, taxOn: false, taxPct: 6
+        });
+        console.assert(Math.round(t5.totalUSD) === 200, "Test5 failed: rush x2 should double base => 200");
+
+        // Test6: resetFields should clear dynamic lists (resizes/extras)
+        try{
+          addResizeRow("9:16", 0.8);
+          addExtraRow("диктор", 50);
+          resetFields();
+          var rl = $("resizeList");
+          var el = $("extraList");
+          var rzCount = rl ? rl.querySelectorAll(".resize-row").length : 0;
+          var exCount = el ? el.querySelectorAll(".extra-row").length : 0;
+          console.assert(rzCount === 0, "Test6 failed: resizes should be cleared by resetFields");
+          console.assert(exCount === 0, "Test6 failed: extra items should be cleared by resetFields");
+        }catch(e6){
+          console.warn("Test6 skipped:", e6);
+        }
+
+
+      } catch (err) {
+        console.warn("Self-tests skipped/failed:", err);
+      }
+    
+
+      // Test7: PDF export should be removed (no dangling handlers)
+      try{
+        console.assert(typeof window.exportPdf === "undefined", "Test7 failed: exportPdf should be removed");
+        console.assert(typeof window.buildPdfHtml === "undefined", "Test7 failed: buildPdfHtml should be removed");
+      }catch(e7){}
+
+    })();
+
+    wire();
+  </script>
+</body>
+</html>
